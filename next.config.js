@@ -1,9 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   typescript: {
-    // This forces Vercel to bypass the missing package error entirely
+    // This explicitly tells Next.js to skip type-checking and build anyway
     ignoreBuildErrors: true,
   },
 };
 
-module.exports = nextConfig;
+export default nextConfig;
