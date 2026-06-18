@@ -1,9 +1,3 @@
-/** @type {import('next').NextConfig} */
-const nextConfig = {
-  typescript: {
-    // This explicitly tells Next.js to skip type-checking and build anyway
-    ignoreBuildErrors: true,
-  },
-};
-
+import type { NextConfig } from "next";
+const nextConfig: NextConfig = {};
 export default nextConfig;
