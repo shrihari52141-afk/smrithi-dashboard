@@ -1,227 +1,163 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-// Initialize Supabase Client
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// Types
-interface Conversation {
-  id: string;
-  profile_name: string;
-  mobile: string;
-  updated_at: string;
-}
 interface Message {
   id: string;
-  conversation_id: string;
-  role: "user" | "assistant";
-  content: string;
-  message_type: string;
+  sender_number: string;
+  message_text: string;
+  bot_reply: string;
   created_at: string;
-}
-interface ApiLog {
-  id: string;
-  model: string;
   status: string;
-  latency_ms: number;
-  api_key_index: number;
-  created_at: string;
 }
+
+interface Stats {
+  total: number;
+  today: number;
+  replied: number;
+  failed: number;
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  page: { minHeight: "100vh", backgroundColor: "#0f172a", color: "#e2e8f0", fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif", padding: "0" },
+  header: { backgroundColor: "#1e293b", borderBottom: "1px solid #334155", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 50 },
+  headerLeft: { display: "flex", alignItems: "center", gap: "12px" },
+  logo: { width: "36px", height: "36px", backgroundColor: "#22c55e", borderRadius: "10px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px" },
+  headerTitle: { fontSize: "18px", fontWeight: 700, color: "#f1f5f9", margin: 0 },
+  headerSubtitle: { fontSize: "12px", color: "#64748b", margin: 0 },
+  statusDot: { display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#22c55e" },
+  dot: { width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#22c55e", animation: "pulse 2s infinite" },
+  main: { maxWidth: "1200px", margin: "0 auto", padding: "24px 20px" },
+  statsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px", marginBottom: "28px" },
+  statCard: { backgroundColor: "#1e293b", border: "1px solid #334155", borderRadius: "12px", padding: "20px" },
+  statLabel: { fontSize: "12px", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px", fontWeight: 600 },
+  statValue: { fontSize: "32px", fontWeight: 800, color: "#f1f5f9", lineHeight: 1, marginBottom: "4px", fontVariantNumeric: "tabular-nums" },
+  statChange: { fontSize: "12px", color: "#94a3b8" },
+  sectionTitle: { fontSize: "16px", fontWeight: 700, color: "#f1f5f9", marginBottom: "16px" },
+  tableWrapper: { backgroundColor: "#1e293b", border: "1px solid #334155", borderRadius: "12px", overflow: "hidden", marginBottom: "28px" },
+  tableHeader: { padding: "16px 20px", borderBottom: "1px solid #334155", display: "flex", alignItems: "center", justifyContent: "space-between" },
+  table: { width: "100%", borderCollapse: "collapse" },
+  th: { padding: "12px 20px", textAlign: "left", fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", backgroundColor: "#0f172a", borderBottom: "1px solid #334155" },
+  td: { padding: "14px 20px", fontSize: "13px", color: "#cbd5e1", borderBottom: "1px solid #1e293b", verticalAlign: "top" },
+  refreshBtn: { display: "flex", alignItems: "center", gap: "6px", padding: "8px 16px", backgroundColor: "#0ea5e9", color: "white", border: "none", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer" },
+  emptyState: { padding: "48px", textAlign: "center", color: "#475569" },
+  timeText: { fontSize: "11px", color: "#475569", fontVariantNumeric: "tabular-nums" },
+  numberText: { fontWeight: 600, color: "#e2e8f0" },
+};
+
+const badge = (color: string): React.CSSProperties => ({
+  display: "inline-block", padding: "2px 10px", borderRadius: "9999px", fontSize: "11px", fontWeight: 600,
+  backgroundColor: color === "green" ? "#14532d" : color === "red" ? "#450a0a" : "#1e3a5f",
+  color: color === "green" ? "#4ade80" : color === "red" ? "#f87171" : "#60a5fa",
+});
 
 export default function Dashboard() {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeChat, setActiveChat] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [logs, setLogs] = useState<ApiLog[]>([]);
-  const [totalApiCalls, setTotalApiCalls] = useState(0);
+  const [stats, setStats] = useState<Stats>({ total: 0, today: 0, replied: 0, failed: 0 });
+  const [loading, setLoading] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState<string>("");
 
-  // 1. Fetch Conversations & API Logs on Mount
-  useEffect(() => {
-    fetchConversations();
-    fetchApiLogs();
-
-    // Subscribe to Realtime Messages
-    const msgChannel = supabase
-      .channel("messages-realtime")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "messages" },
-        (payload) => {
-          const newMsg = payload.new as Message;
-          setMessages((prev) => [...prev, newMsg]);
-        }
-      )
-      .subscribe();
-
-    // Subscribe to Realtime API Logs
-    const logChannel = supabase
-      .channel("logs-realtime")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "api_logs" },
-        (payload) => {
-          const newLog = payload.new as ApiLog;
-          setLogs((prev) => [newLog, ...prev].slice(0, 50));
-          setTotalApiCalls((prev) => prev + 1);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(msgChannel);
-      supabase.removeChannel(logChannel);
-    };
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.from("messages").select("*").order("created_at", { ascending: false }).limit(50);
+      if (error) throw error;
+      const rows: Message[] = data || [];
+      setMessages(rows);
+      const todayStr = new Date().toISOString().split("T")[0];
+      setStats({
+        total: rows.length,
+        today: rows.filter((m) => m.created_at?.startsWith(todayStr)).length,
+        replied: rows.filter((m) => m.status === "replied" || m.bot_reply).length,
+        failed: rows.filter((m) => m.status === "failed").length,
+      });
+      setLastUpdated(new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+    } catch (err) {
+      console.error("Fetch error:", err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  // Fetch messages when active chat changes
-  useEffect(() => {
-    if (activeChat) fetchMessages(activeChat.id);
-  }, [activeChat]);
+  useEffect(() => { fetchData(); const i = setInterval(fetchData, 30000); return () => clearInterval(i); }, [fetchData]);
 
-  const fetchConversations = async () => {
-    const { data } = await supabase
-      .from("conversations")
-      .select("*")
-      .order("updated_at", { ascending: false });
-    if (data) setConversations(data as Conversation[]);
-  };
+  const formatPhone = (num: string) => { if (!num) return "—"; const n = num.replace(/D/g, ""); return n.length >= 10 ? `+${n.slice(0,2)} ${n.slice(2,7)} ${n.slice(7)}` : num; };
+  const formatTime = (iso: string) => { if (!iso) return "—"; return new Date(iso).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); };
 
-  const fetchMessages = async (chatId: string) => {
-    const { data } = await supabase
-      .from("messages")
-      .select("*")
-      .eq("conversation_id", chatId)
-      .order("created_at", { ascending: true });
-    if (data) setMessages(data as Message[]);
-  };
-
-  const fetchApiLogs = async () => {
-    const { data: logsData } = await supabase
-      .from("api_logs")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(50);
-    
-    if (logsData) setLogs(logsData as ApiLog[]);
-
-    const { count } = await supabase
-      .from("api_logs")
-      .select("*", { count: "exact", head: true });
-    
-    setTotalApiCalls(count || 0);
-  };
+  const statCards = [
+    { label: "Total Messages", value: stats.total, icon: "💬", color: "#0ea5e9" },
+    { label: "Today's Messages", value: stats.today, icon: "📅", color: "#a855f7" },
+    { label: "Bot Replies Sent", value: stats.replied, icon: "🤖", color: "#22c55e" },
+    { label: "Failed / Errors", value: stats.failed, icon: "⚠️", color: "#ef4444" },
+  ];
 
   return (
-    <div className="flex h-screen bg-gray-900 text-white">
-      {/* Sidebar: Conversations */}
-      <div className="w-1/4 border-r border-gray-700 flex flex-col">
-        <div className="p-4 bg-gray-800 font-bold text-lg border-b border-gray-700">
-          💬 Smrithi Chats
+    <div style={styles.page}>
+      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} } tr:hover td { background-color: #0f172a !important; }`}</style>
+      <header style={styles.header}>
+        <div style={styles.headerLeft}>
+          <div style={styles.logo}>💬</div>
+          <div><p style={styles.headerTitle}>Smrithi Dashboard</p><p style={styles.headerSubtitle}>WhatsApp AI Bot Monitor</p></div>
         </div>
-        <div className="flex-1 overflow-y-auto">
-          {conversations.map((convo) => (
-            <div
-              key={convo.id}
-              onClick={() => setActiveChat(convo)}
-              className={`p-4 border-b border-gray-800 cursor-pointer hover:bg-gray-800 ${
-                activeChat?.id === convo.id ? "bg-gray-700" : ""
-              }`}
-            >
-              <div className="font-semibold">{convo.profile_name}</div>
-              <div className="text-xs text-gray-400">{convo.mobile}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+          {lastUpdated && <span style={styles.timeText}>Updated {lastUpdated}</span>}
+          <div style={styles.statusDot}><span style={styles.dot} />Live</div>
+          <button style={styles.refreshBtn} onClick={fetchData} disabled={loading}>{loading ? "⟳ Loading..." : "⟳ Refresh"}</button>
+        </div>
+      </header>
+      <main style={styles.main}>
+        <div style={styles.statsGrid}>
+          {statCards.map((card) => (
+            <div key={card.label} style={styles.statCard}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
+                <span style={styles.statLabel}>{card.label}</span>
+                <span style={{ fontSize: "22px" }}>{card.icon}</span>
+              </div>
+              <div style={{ ...styles.statValue, color: card.color }}>{loading ? "..." : card.value.toLocaleString()}</div>
+              <div style={styles.statChange}>All time</div>
             </div>
           ))}
-          {conversations.length === 0 && (
-            <div className="p-4 text-center text-gray-500 text-sm">
-              No conversations yet. Send a WhatsApp message to your bot!
+        </div>
+        <div style={styles.tableWrapper}>
+          <div style={styles.tableHeader}>
+            <span style={styles.sectionTitle}>Recent Messages</span>
+            <span style={{ fontSize: "12px", color: "#475569" }}>Showing {messages.length} records · Auto-refreshes every 30s</span>
+          </div>
+          {loading && messages.length === 0 ? (
+            <div style={styles.emptyState}><div style={{ fontSize: "40px", marginBottom: "12px" }}>⟳</div><p>Loading messages...</p></div>
+          ) : messages.length === 0 ? (
+            <div style={styles.emptyState}><div style={{ fontSize: "40px", marginBottom: "12px" }}>📭</div><p style={{ fontWeight: 600, color: "#94a3b8", marginBottom: "6px" }}>No messages yet</p><p style={{ fontSize: "13px" }}>Messages will appear here automatically</p></div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={styles.table}>
+                <thead><tr>
+                  <th style={styles.th}>Sender</th>
+                  <th style={styles.th}>Message</th>
+                  <th style={styles.th}>Bot Reply</th>
+                  <th style={styles.th}>Status</th>
+                  <th style={styles.th}>Time</th>
+                </tr></thead>
+                <tbody>
+                  {messages.map((msg) => (
+                    <tr key={msg.id}>
+                      <td style={styles.td}><span style={styles.numberText}>{formatPhone(msg.sender_number)}</span></td>
+                      <td style={styles.td}><div style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{msg.message_text || "—"}</div></td>
+                      <td style={styles.td}><div style={{ maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#94a3b8", fontSize: "12px" }}>{msg.bot_reply || <span style={{ color: "#334155" }}>No reply</span>}</div></td>
+                      <td style={styles.td}><span style={badge(msg.status === "failed" ? "red" : (msg.bot_reply || msg.status === "replied") ? "green" : "blue")}>{msg.status === "failed" ? "Failed" : msg.bot_reply ? "Replied" : msg.status || "Received"}</span></td>
+                      <td style={styles.td}><span style={styles.timeText}>{formatTime(msg.created_at)}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
-      </div>
-
-      {/* Main Chat Window */}
-      <div className="flex-1 flex flex-col">
-        {activeChat ? (
-          <>
-            <div className="p-4 bg-gray-800 font-bold border-b border-gray-700 sticky top-0">
-              {activeChat.profile_name}
-              <span className="text-xs text-gray-400 ml-2">{activeChat.mobile}</span>
-            </div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-900 bg-opacity-50">
-              {messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`flex ${msg.role === "user" ? "justify-start" : "justify-end"}`}
-                >
-                  <div
-                    className={`max-w-xs p-3 rounded-lg shadow ${
-                      msg.role === "user"
-                        ? "bg-gray-700 text-white rounded-bl-none"
-                        : "bg-green-600 text-white rounded-br-none"
-                    }`}
-                  >
-                    <p className="text-sm">{msg.content}</p>
-                    <p className="text-[10px] text-gray-300 mt-1 text-right">
-                      {new Date(msg.created_at).toLocaleTimeString()}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-gray-500">
-            Select a chat to view the conversation
-          </div>
-        )}
-      </div>
-
-      {/* Right Sidebar: API Logs & Analytics */}
-      <div className="w-1/4 border-l border-gray-700 flex flex-col bg-gray-900">
-        <div className="p-4 bg-gray-800 font-bold text-lg border-b border-gray-700">
-          📊 API Analytics
-        </div>
-        
-        <div className="p-4 grid grid-cols-2 gap-3 border-b border-gray-700">
-          <div className="bg-gray-800 p-3 rounded-lg text-center">
-            <p className="text-xs text-gray-400">Total Requests</p>
-            <p className="text-2xl font-bold text-blue-400">{totalApiCalls}</p>
-          </div>
-          <div className="bg-gray-800 p-3 rounded-lg text-center">
-            <p className="text-xs text-gray-400">Active Keys</p>
-            <p className="text-2xl font-bold text-green-400">2</p>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-3 space-y-2">
-          <h3 className="text-sm font-semibold text-gray-400 uppercase mb-2">Live Logs</h3>
-          {logs.map((log) => (
-            <div key={log.id} className="bg-gray-800 p-3 rounded-md text-xs">
-              <div className="flex justify-between items-center mb-1">
-                <span className={`px-2 py-0.5 rounded font-mono ${
-                  log.status === "success" ? "bg-green-900 text-green-300" : "bg-red-900 text-red-300"
-                }`}>
-                  {log.status}
-                </span>
-                <span className="text-gray-500">{log.latency_ms}ms</span>
-              </div>
-              <div className="font-bold text-purple-400 truncate">{log.model}</div>
-              <div className="text-gray-400 mt-1 flex justify-between">
-                <span>Key {log.api_key_index + 1}</span>
-                <span>{new Date(log.created_at).toLocaleTimeString()}</span>
-              </div>
-            </div>
-          ))}
-          {logs.length === 0 && (
-            <p className="text-gray-500 text-center text-sm mt-10">No API calls yet...</p>
-          )}
-        </div>
-      </div>
+      </main>
     </div>
   );
 }
