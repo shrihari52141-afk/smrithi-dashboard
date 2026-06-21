@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.message-bubble {
+  max-width: 70%;
+  padding: 8px 14px;
+  border-radius: 18px;
+  position: relative;
+  word-wrap: break-word;
+}
+
+.message-bubble.sent {
+  background-color: #dcf8c6;
+  border-bottom-right-radius: 4px;
+}
+
+.message-bubble.received {
+  background-color: white;
+  border-bottom-left-radius: 4px;
+}
