@@ -1,6 +1,12 @@
-export const metadata = {
-  title: 'Smrithi Control Dashboard',
-  description: 'WhatsApp AI Bot Monitor & Control Center',
+import type { Metadata } from 'next'
+import './globals.css'
+
+export const metadata: Metadata = {
+  title: 'Smrithi • Dashboard',
+  description: 'Smrithi AI Best Friend - Admin Dashboard',
+  icons: {
+    icon: '/favicon.ico',
+  },
 }
 
 export default function RootLayout({
@@ -10,14 +16,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body style={{ 
-        margin: 0, 
-        padding: 0, 
-        backgroundColor: '#0b141a', 
-        color: '#e9edef', 
-        fontFamily: 'Segoe UI, system-ui, -apple-system, sans-serif',
-        overflow: 'hidden' // Prevents body scrollbars, inner divs will handle scrolling
-      }}>
+      <body className="bg-gray-100 font-sans antialiased">
         {children}
       </body>
     </html>
